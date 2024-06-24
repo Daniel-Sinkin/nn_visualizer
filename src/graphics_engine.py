@@ -17,7 +17,13 @@ import pygame as pg  # noqa: E402
 
 
 class GraphicsEngine:
-    def __init__(self, nodes_per_layer=(8, 4, 2, 1), id_=0):
+    def __init__(
+        self,
+        nodes_per_layer: tuple[int, ...] = (8, 4, 2, 1),
+        id_: int = 0,
+        record_video: bool = False,
+        max_frames: int = None,
+    ):
         self.window_size: tuple[float, float] = (1600.0, 900.0)
         self.aspect_ratio: float = self.window_size[0] / self.window_size[1]
 
@@ -105,7 +111,7 @@ class GraphicsEngine:
 
         self.iterations: int = 0
 
-        self.record_video = True
+        self.record_video = record_video
         self.id = id_
 
     def render(self) -> None:
@@ -204,7 +210,7 @@ class GraphicsEngine:
             self.iteration()
             self.iterations += 1
             self.delta_time = self.clock.tick(60.0) / 1000.0
-            if self.iterations >= 600:
+            if self.max_frames is not None and (self.iterations >= self.max_frames):
                 self.is_running = False
 
         if self.record_video:
@@ -230,8 +236,7 @@ class Node:
         self.ctx: mgl.Context = app.ctx
         self.pos: vec2 = pos
         self.scale: vec2 = scale
-        self.color_base = color
-        self.color = self.color_base * value
+        self.color = color
         self.color_outline = color_outline or vec4(0.0, 0.0, 0.0, 1.0)
         self.outline_width = outline_width
         self.value = value
@@ -274,14 +279,12 @@ class Node:
             self.program, [(self.vbo, "2f", "in_position")]
         )
 
-    def update(self) -> None: ...
+    def update(self) -> None:
+        self.color = vec4(1 - self.value, self.value, 0.0, 1.0)
 
     def render(self) -> None:
         # Render normal circle
-        self.program["u_color"].value = tuple(
-            vec4(0.0, 1.0, 0.0, 1.0) * self.value
-            + vec4(1.0, 0.0, 0.0, 1.0) * (1 - self.value)
-        )
+        self.program["u_color"].value = self.color
         self.program["u_scale"].write((1.0 - self.outline_width) * self.scale)
         self.vao.render(mgl.TRIANGLE_FAN)
 

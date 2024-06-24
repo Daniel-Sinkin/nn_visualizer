@@ -12,10 +12,10 @@ def main():
         (1, 2, 5, 2, 1),
     ]
     for i, layout in enumerate(node_layouts):
-        if i != 5:
-            continue
         print(f"{i} / {len(node_layouts)} ({i / len(node_layouts)*100:.2f} %)")
-        graphics_engine = GraphicsEngine(layout, i)
+        graphics_engine = GraphicsEngine(
+            nodes_per_layer=layout, id_=i, record_video=True, max_frames=600
+        )
         graphics_engine.run()
 
 
