@@ -1,9 +1,5 @@
 # Ensure you're using the latest version of Pillow
-import PIL
 from moviepy.editor import VideoFileClip, concatenate_videoclips
-from PIL import Image
-
-print(PIL.__version__)
 
 
 def main():
@@ -11,7 +7,6 @@ def main():
     video_files = [f"videos/output_video_{i}.mp4" for i in range(7)]
 
     # Desired resolution and frame rate
-    target_resolution = (1600, 900)
     target_fps = 60.0
 
     # Load and process all video clips
