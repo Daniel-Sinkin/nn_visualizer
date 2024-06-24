@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from typing import Optional
 
+import imageio_ffmpeg as ffmpeg
 import moderngl as mgl
 import numpy as np
 import torch
@@ -16,7 +17,7 @@ import pygame as pg  # noqa: E402
 
 
 class GraphicsEngine:
-    def __init__(self):
+    def __init__(self, nodes_per_layer=(8, 4, 2, 1), id_=0):
         self.window_size: tuple[float, float] = (1600.0, 900.0)
         self.aspect_ratio: float = self.window_size[0] / self.window_size[1]
 
@@ -32,7 +33,9 @@ class GraphicsEngine:
             pg.GL_CONTEXT_PROFILE_MASK, pg.GL_CONTEXT_PROFILE_CORE
         )
         # OpenGL Context
-        pg.display.set_mode(self.window_size, flags=pg.OPENGL | pg.DOUBLEBUF)
+        self.pg_window = pg.display.set_mode(
+            self.window_size, flags=pg.OPENGL | pg.DOUBLEBUF
+        )
         self.ctx: mgl.Context = mgl.create_context()
         self.ctx.enable(flags=mgl.DEPTH_TEST | mgl.CULL_FACE)
 
@@ -40,7 +43,7 @@ class GraphicsEngine:
         self.screenshot_dir = "screenshots"
         os.makedirs(self.screenshot_dir, exist_ok=True)
 
-        self.nodes_per_layer: tuple[int, ...] = (8, 6, 6, 3, 2, 1)
+        self.nodes_per_layer: tuple[int, ...] = nodes_per_layer
         nodes_max: int = max(self.nodes_per_layer)
 
         self.weights = []
@@ -76,9 +79,14 @@ class GraphicsEngine:
                     Node(
                         app=self,
                         pos=vec2(position),
-                        scale=vec2(0.3 / max(self.nodes_per_layer))
+                        scale=vec2(
+                            min(
+                                0.3 / max(self.nodes_per_layer),
+                                0.4 / len(self.nodes_per_layer),
+                            )
+                        )
                         * vec2(1 / self.aspect_ratio, 1.0),
-                        outline_width=0.1,
+                        outline_width=0.2,
                         color=vec4(vec3(0.6), 1.0),
                     )
                 )
@@ -91,13 +99,14 @@ class GraphicsEngine:
                         app=self, start=vec2(x1, y1), end=vec2(x2, y2), thickness=0.005
                     )
 
-        self.yss: list[torch.Tensor] = [torch.rand(self.nodes_per_layer[0]) / 2.0 + 0.5]
+        self.yss: list[torch.Tensor] = [torch.rand(self.nodes_per_layer[0]) * 2.0 - 1.0]
         for i in range(len(self.weights)):
-            self.yss.append(self.weights[i] @ self.yss[i])
+            self.yss.append(torch.sigmoid(self.weights[i] @ self.yss[i]))
 
         self.iterations: int = 0
 
-        self.record_video = False
+        self.record_video = True
+        self.id = id_
 
     def render(self) -> None:
         self.ctx.clear(0.15, 0.15, 0.25)
@@ -129,28 +138,29 @@ class GraphicsEngine:
         for line in self.lines.values():
             line.update()
 
-        self.yss = [torch.rand(self.nodes_per_layer[0]) / 2.0 + 0.5]
+        self.yss = [self.yss[0]]
         for i, weight_tensor in enumerate(self.weights):
-            self.yss.append(weight_tensor @ self.yss[i])
+            self.yss.append(torch.sigmoid(weight_tensor @ self.yss[i]))
 
         for j, ys in enumerate(self.yss):
             for i, y in enumerate(ys):
                 self.node_layers[j][i].value = y.item()
 
         for weight_tensor in self.weights:
-            weight_tensor += (
-                0.15
-                * (1.5 + float(np.sin(pg.time.get_ticks() * 0.2 * np.pi / 1000.0)))
-                * torch.randn_like(weight_tensor)
-            )
-            torch.clamp(weight_tensor, 0.1, 1.0)
+            weight_tensor += 0.4 * (2.0 * torch.rand_like(weight_tensor) - 1.0)
+            torch.clamp(weight_tensor, -1.0, 1.0)
 
     def take_screenshot(self) -> None:
+        screen: pg.Surface = pg.display.get_surface()
+        screen_surf: pg.Surface = pg.image.fromstring(
+            self.ctx.screen.read(components=3), screen.get_size(), "RGB"
+        )
+
         screenshot_path = os.path.join(self.screenshot_dir, f"{self.iterations}.png")
-        pg.image.save(pg.display.get_surface(), screenshot_path)
+        pg.image.save(screen_surf, screenshot_path)
 
     def convert_images_to_video(
-        image_folder: str, output_video: str, fps: int = 60
+        self, image_folder: str, output_video: str, fps: int = 60, crf: int = 4
     ) -> None:
         images: list[str] = sorted(
             [img for img in os.listdir(image_folder) if img.endswith(".png")]
@@ -166,6 +176,8 @@ class GraphicsEngine:
             input_pattern,  # Input pattern
             "-c:v",
             "libx264",  # Codec to use for video encoding
+            "-crf",
+            str(crf),  # Constant Rate Factor for quality control
             "-pix_fmt",
             "yuv420p",  # Pixel format
             output_video,  # Output file
@@ -197,7 +209,9 @@ class GraphicsEngine:
 
         if self.record_video:
             print("Converting screenshots to video...")
-            self.convert_images_to_video("screenshots", "output_video.mp4")
+            self.convert_images_to_video(
+                "screenshots", f"videos/output_video_{self.id}.mp4"
+            )
         print("Finished running normally.")
 
 
@@ -260,12 +274,14 @@ class Node:
             self.program, [(self.vbo, "2f", "in_position")]
         )
 
-    def update(self) -> None:
-        self.color = self.color_base * self.value
+    def update(self) -> None: ...
 
     def render(self) -> None:
         # Render normal circle
-        self.program["u_color"].value = tuple(self.color)
+        self.program["u_color"].value = tuple(
+            vec4(0.0, 1.0, 0.0, 1.0) * self.value
+            + vec4(1.0, 0.0, 0.0, 1.0) * (1 - self.value)
+        )
         self.program["u_scale"].write((1.0 - self.outline_width) * self.scale)
         self.vao.render(mgl.TRIANGLE_FAN)
 
@@ -312,7 +328,7 @@ class Line:
             }
             """,
         )
-        self.program["u_color"].value = tuple(self.color)
+        self.program["u_color"].write(self.color)
 
         self.update_quad_vertices()
         self.vbo: mgl.Buffer = self.ctx.buffer(self.quad_vertex_data)
@@ -343,7 +359,6 @@ class Line:
 
     def update(self) -> None:
         self.program["u_color"].write(self.color / 10.0)
-        self.update_quad_vertices()
         self.vbo: mgl.Buffer = self.ctx.buffer(self.quad_vertex_data)
         self.vao: mgl.VertexArray = self.ctx.vertex_array(
             self.program, [(self.vbo, "2f", "in_position")]
