@@ -200,3 +200,151 @@ class GraphicsEngine:
             self.convert_images_to_video("screenshots", "output_video.mp4")
         print("Finished running normally.")
 
+
+class Node:
+    def __init__(
+        self,
+        app: GraphicsEngine,
+        pos: vec2,
+        scale: vec2,
+        color: vec4,
+        outline_width: float,
+        color_outline: Optional[vec4] = None,
+        value: float = 0.0,
+    ):
+        self.app: GraphicsEngine = app
+        self.ctx: mgl.Context = app.ctx
+        self.pos: vec2 = pos
+        self.scale: vec2 = scale
+        self.color_base = color
+        self.color = self.color_base * value
+        self.color_outline = color_outline or vec4(0.0, 0.0, 0.0, 1.0)
+        self.outline_width = outline_width
+        self.value = value
+
+        self.program = self.ctx.program(
+            vertex_shader="""
+            #version 330
+
+            in vec2 in_position;
+            uniform vec2 u_scale;
+            uniform vec2 u_pos;
+
+            void main() {
+                gl_Position = vec4(u_scale * in_position + u_pos, 0.0, 1.0);
+            }
+            """,
+            fragment_shader="""
+            #version 330
+
+            out vec4 fragColor;
+            uniform vec4 u_color;
+
+            void main() {
+                fragColor = u_color;
+            }
+            """,
+        )
+        self.program["u_pos"].write(self.pos)
+
+        circle_vertex_data: np.ndarray[np.float32] = np.array(
+            [
+                [np.cos(theta), np.sin(theta)]
+                for theta in np.linspace(0, 2 * np.pi, 2**6)
+            ],
+            dtype=np.float32,
+        )
+
+        self.vbo: mgl.Buffer = self.ctx.buffer(circle_vertex_data)
+        self.vao: mgl.VertexArray = self.ctx.vertex_array(
+            self.program, [(self.vbo, "2f", "in_position")]
+        )
+
+    def update(self) -> None:
+        self.color = self.color_base * self.value
+
+    def render(self) -> None:
+        # Render normal circle
+        self.program["u_color"].value = tuple(self.color)
+        self.program["u_scale"].write((1.0 - self.outline_width) * self.scale)
+        self.vao.render(mgl.TRIANGLE_FAN)
+
+        # Render outline circle
+        self.program["u_color"].value = tuple(self.color_outline)
+        self.program["u_scale"].write(1.0 * self.scale)
+        self.vao.render(mgl.TRIANGLE_FAN)
+
+
+class Line:
+    def __init__(
+        self,
+        app: GraphicsEngine,
+        start: vec2,
+        end: vec2,
+        thickness: float,
+        color: Optional[vec4] = None,
+    ):
+        self.app: GraphicsEngine = app
+        self.ctx: mgl.Context = app.ctx
+        self.start: vec2 = start
+        self.end: vec2 = end
+        self.thickness: float = thickness
+        self.color: vec4 = color or vec4(1.0)
+
+        self.program = self.ctx.program(
+            vertex_shader="""
+            #version 330
+
+            in vec2 in_position;
+
+            void main() {
+                gl_Position = vec4(in_position, 0.0, 1.0);
+            }
+            """,
+            fragment_shader="""
+            #version 330
+
+            out vec4 fragColor;
+            uniform vec4 u_color;
+
+            void main() {
+                fragColor = u_color;
+            }
+            """,
+        )
+        self.program["u_color"].value = tuple(self.color)
+
+        self.update_quad_vertices()
+        self.vbo: mgl.Buffer = self.ctx.buffer(self.quad_vertex_data)
+        self.vao: mgl.VertexArray = self.ctx.vertex_array(
+            self.program, [(self.vbo, "2f", "in_position")]
+        )
+
+    # TODO: Instead of doing this weird thing directly create a single quad and transform that properly.
+    def update_quad_vertices(self) -> None:
+        direction = self.end - self.start
+        length = np.linalg.norm(direction)
+        direction /= length
+
+        normal = np.array([-direction[1], direction[0]], dtype=np.float32)
+        offset = (self.thickness / 2) * normal
+
+        p1 = self.start + offset
+        p2 = self.start - offset
+        p3 = self.end - offset
+        p4 = self.end + offset
+
+        self.quad_vertex_data: np.ndarray[np.float32] = np.array(
+            [p1, p2, p3, p3, p4, p1], dtype=np.float32
+        )
+
+    def render(self) -> None:
+        self.vao.render(mgl.TRIANGLES)
+
+    def update(self) -> None:
+        self.program["u_color"].write(self.color / 10.0)
+        self.update_quad_vertices()
+        self.vbo: mgl.Buffer = self.ctx.buffer(self.quad_vertex_data)
+        self.vao: mgl.VertexArray = self.ctx.vertex_array(
+            self.program, [(self.vbo, "2f", "in_position")]
+        )
